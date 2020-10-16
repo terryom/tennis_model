@@ -1,0 +1,131 @@
+---
+title: "The Bradley-Terry Model of Ranking via Paired Comparisons"
+author: "Terry O'Malley"
+date: |
+  | 01 October 2020
+  | This version: `r format(Sys.time(), '%d %B %Y')`
+output:
+  tufte::tufte_html:
+    toc: true
+    toc_depth: 1
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE)
+```
+
+This notebook is a prototype Bradley-Terry model for predicting match outcomes on the ATP tour. 
+
+A good way to learn Stan and Bayesian Modelling! Maybe I should write my name in its augmentative form (Terence) to distinguish me from the original author. 
+
+
+### To-Do
+
+- [ ] write down model: think about the home advantage in BradleyTerry2 package. E.g. hard court does not feed into one players ability. Each player has an advantage for each court that you want to estimate. 
+
+```{r}
+library(data.table)
+library(rstan)
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+library(ggplot2); theme_set(theme_minimal(base_size = 16))
+```
+
+## Model 
+
+The Bradley-Terry (BT) model is very similar to the discrete choice model familiar to economists. The discrete choice model predicts which product is chosen by a consumer based on the relative utility derived by the consumer from choosing each item. 
+
+The BT model relates the probability of victory of one player over another to their *relative* abilities. Put simply, if player 1 is more able than player 2, then player 1 is favoured to win. The degree to which player 1 is favoured is also determined by the relative difference in their abilities. 
+
+If there are two players, 1 and 2, each has an ability parameter $\alpha_i$. The probability of player 1 winning the contest is related to the ability parameters $\{\alpha_1,\alpha_2\}$$. 
+
+The logit (log-odds) transformation is a useful method of transforming quantities on the unit interval (such as probabilities) to continuous values. 
+
+$$ \mathrm{logit}:(0, 1) \rightarrow (-\infty, \infty)$$
+Therefore the inverse logit transformation performs the transformation of interest here: it provides a mapping from continuous values ("abilities") to probabilities/
+
+$$\mathrm{logit}^{-1}:(-\infty, \infty) \rightarrow (0, 1)$$
+Return to our postulated notion of abilities, we can write our model:
+
+$$ \mathrm{P(player\,1\, wins)} =F(\alpha_1 - \alpha_2)$$
+Whichever player has the highest relative ability is therefore predicted to win the match. 
+
+The generic function $F(\cdot)$ in this expression is just a placeholder and means that we need some way to map $\alpha_1 - \alpha_2$ to the unit interval in order to understand them as probabilities. This is exactly the role of the inverse logit function. 
+
+$$ \mathrm{P(player\,1\, wins)} =\mathrm{logit}^{-1}(\alpha_1 - \alpha_2)$$
+The inverse logit function is given by 
+
+$$\mathrm{logit}^{-1}(x) = \frac{e^x}{1+e^x}$$
+Combining the previous two equation, in our model the probability that player 1 wins is therefore
+
+$$ \mathrm{P(player\,1\, wins)} = \frac{e^{\alpha_1 - \alpha_2}}{1+e^{\alpha_1 - \alpha_2}}$$
+
+This will look very familiar to economists as it is similar to the specificaiton for a logistic regression. 
+
+An numerical example shows the probability a player of ability 2 beats a player of ability 1.5
+
+```{r}
+(exp(2 - 1.5)/(1+ exp(2 - 1.5)))
+```
+
+The goal of the estimation will be to estimate the relative abilitiy parameters. Of course, 2 and 1.5 mean nothing on their own, it's only their relative differences that speak about the quality of the players. This is similar to the principle in logit models in economics, in which the indirect utilities of different products have no direct meaning and only tell you which product is preferred by the consumer. 
+
+## Likelihood 
+
+The BT/logit model is estimated using maximum likelihood i.e. selecting values for the ability parameters to maximise the likelihood of observing the recorded wins and losses. 
+
+The likelihood is defined as the probability that, given a set of ability parameters $\{\alpha_i, ..., \alpha_N\}$, we would observe the K-dimensional outcomes $y$ in our data (K is the number of matches). So the probability of observing the outcome of the first match **and** the second match **and** the K-th match. 
+
+$$p(y \mid \alpha) = \prod_{n=1}^N \mathsf{Bernoulli}\!\left(y_n \ \bigg| \ \mathrm{logit}^{-1}\!\left(\alpha_{\mathrm{player1}[n]} - \alpha_{\mathrm{player0}[n]}\right)\right)\!$$
+Alternatively, 
+
+$$p(y \mid \alpha)= \prod_{n=1}^N \bigg(\frac{e^{\alpha_1 - \alpha_2}}{1+e^{\alpha_1 - \alpha_2}}\bigg)^{y_n}\bigg(1 - \frac{e^{\alpha_1 - \alpha_2}}{1+e^{\alpha_1 - \alpha_2}}\bigg)^{1-{y_n}}$$
+An example of a poorly fitting model could give a likelihood of:
+
+```{r}
+inv_logit <- function(u) 1 / (1 + exp(-u)) # equivalent to definition above but easier to type
+y <- c(1, 1, 1, 0)  ## winner of the matches (1 if player 2 wins)
+a <- c(1,0)
+prob <- inv_logit(a[2] - a[1])
+
+ld <- rep(NA, length(y))
+for(i in 1:length(y))  ld[i] <- (prob^y[i]) * (1-prob)^(1-y[i])
+
+## likelihood 
+prod(ld)
+
+```
+
+Let's try again with reversed alpha parameters 
+
+```{r}
+a2 <- c(0,1)
+prob2 <- inv_logit(a2[2] - a2[1])
+ld2 <- rep(NA, length(y))
+for(i in 1:length(y))  ld2[i] <- (prob2^y[i]) * (1-prob2)^(1-y[i])
+## likelihood 
+prod(ld2)
+
+```
+
+We have a higher likelihood when we assign player 2 a higher ranking. Which makes sense because player 2 won 3 out of the 4 matches. 
+
+## Data {-}
+
+Combine 2019 and 2020 tour data 
+
+```{r}
+dat <- rbindlist(
+  list(
+    fread("./data/atp_matches_2020.csv"), 
+     fread("./data/atp_matches_2019.csv")
+  )
+)
+
+
+```
+
+For the model, 
+
+
+
